@@ -4,7 +4,7 @@
 
 In this repository, we present artifacts corresponding an intelligent framework that provides automated Data transformations and optimal model deployment, to accelerate accurate and timely inspection of data and model quality checks, and facilitate the productivity of distinguished Data and ML teams across the organization.
 
-![stepfunction.png](https://github.com/aws-samples/automated-exploratory-data-with-model-operationalization/blob/main/stepfunction.png)
+![stepfunction.png](https://github.com/aws-samples/automated-exploratory-data-with-model-operationalization/tree/main/Images/stepfunction.png)
 
 ## Dataset
 
