@@ -20,8 +20,14 @@ In order to demonstrate the orchestrated workflow, we use the example of Patient
 
 ### Walkthrough
 
+For a full walkthrough of Automating Exploratory Data Analysis and Model Operationalization with Amazon Sagemaker, see this blog post. 
+
+Our solution demonstrates an automated end-to-end approach to perform Exploratory Data Analysis (EDA) with human in the loop to determine the model quality thresholds and approve the optimal/qualified data to be pushed into Sagemaker pipeline in order to push the final data into feature store, thereby speeding the executional framework. 
+
+Further, the approach shows deploying the best candidate model and creating the model endpoint on the transformed dataset that was automatically processed as new data arrives into the framework.
 
 
+Below is the initial setup for data preprocessing step prior to automating the workflow:
 
 
 
