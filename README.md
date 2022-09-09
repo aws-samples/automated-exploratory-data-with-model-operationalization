@@ -11,10 +11,9 @@ In order to demonstrate the orchestrated workflow, we use the example of ![Patie
 
 ## Prerequisites
 
-* An AWS account
-* A SageMaker Studio domain with the “AmazonSageMakerFeatureStoreAccess” managed policy attached to the AWS Identity and Access Management (IAM) execution role
-* An S3 bucket
-
+* An [AWS account](https://portal.aws.amazon.com/billing/signup/resume&client_id=signup)
+* A Amazon [SageMaker Studio domain](https://docs.aws.amazon.com/sagemaker/latest/dg/onboard-quick-start.html) with the `AmazonSageMakerFeatureStoreAccess` anaged policy [attached to the IAM execution role](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_manage-attach-detach.html#add-policies-console)
+* An [Amazon S3 Bucket](https://docs.aws.amazon.com/AmazonS3/latest/userguide/create-bucket-overview.html)
 
 ### Walkthrough
 
@@ -28,6 +27,7 @@ Further, the approach shows deploying the best candidate model and creating the 
 Below is the initial setup for data preprocessing step prior to automating the workflow:
 
 ![Dataops.png](https://github.com/aws-samples/automated-exploratory-data-with-model-operationalization/blob/main/Images/Dataops.png)
+
 
 This step comprises of data flow initiation to process the raw data stored in S3 bucket. A sequence of steps in the data wrangler UI are created to perform feature engineering on the data. Then, Sagemaker processing job is executed to save the flow to S3 and storing the transformed features into Sagemaker feature Store for reusable purposes.
 
