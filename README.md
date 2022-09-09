@@ -15,7 +15,8 @@ In order to demonstrate the orchestrated workflow, we use the example of ![Patie
 * A Amazon [SageMaker Studio domain](https://docs.aws.amazon.com/sagemaker/latest/dg/onboard-quick-start.html) with the `AmazonSageMakerFeatureStoreAccess` anaged policy [attached to the IAM execution role](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_manage-attach-detach.html#add-policies-console)
 * An [Amazon S3 Bucket](https://docs.aws.amazon.com/AmazonS3/latest/userguide/create-bucket-overview.html)
 
-### Walkthrough
+
+## Walkthrough
 
 For a full walkthrough of Automating Exploratory Data Analysis and Model Operationalization with Amazon Sagemaker, see this blog post. 
 
