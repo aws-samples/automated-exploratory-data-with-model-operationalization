@@ -41,7 +41,7 @@ The architecture below showcases the end-to-end automation of data transformatio
 
 ## Clean-up
 
-To avoid any recurring charges, stop any running Data Wrangler and Jupyter Notebook instances within Studio when not in use. Also, delete endpoints created in the Sagemaker dashboard. 
+To avoid any recurring charges, stop any running Data Wrangler and Jupyter Notebook instances within Studio when not in use. Make sure to delete the Sagemaker endpoint. Also, delete the output files in Amazon S3 you created while running the orchestration workflow via step function. You have to delete the data in the S3 buckets before you can delete the buckets.  
 
 ## Security
 
