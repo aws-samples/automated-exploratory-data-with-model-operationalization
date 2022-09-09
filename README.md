@@ -26,7 +26,8 @@ Further, the approach shows deploying the best candidate model and creating the 
 
 Below is the initial setup for data preprocessing step prior to automating the workflow:
 
-![Dataops.png](https://github.com/aws-samples/automated-exploratory-data-with-model-operationalization/blob/main/Images/Dataops.png)
+![dataops.png](https://github.com/aws-samples/automated-exploratory-data-with-model-operationalization/blob/main/Images/dataops.png)
+
 
 
 This step comprises of data flow initiation to process the raw data stored in S3 bucket. A sequence of steps in the data wrangler UI are created to perform feature engineering on the data. Then, Sagemaker processing job is executed to save the flow to S3 and storing the transformed features into Sagemaker feature Store for reusable purposes.
@@ -35,7 +36,7 @@ Once the flow has been created which includes the recipe of instructions to be e
 
 The architecture below showcases the end-to-end automation of data transformation followed by human in the loop approval to facilitate the steps of model training and deployment. 
 
-![Stepfunction.png](https://github.com/aws-samples/automated-exploratory-data-with-model-operationalization/tree/main/Images/Stepfunction.png)
+![stepfunction.png](https://github.com/aws-samples/automated-exploratory-data-with-model-operationalization/tree/main/Images/stepfunction.png)
 
 ## Clean-up
 
