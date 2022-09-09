@@ -12,7 +12,7 @@ In order to demonstrate the orchestrated workflow, we use the example of ![Patie
 ## Prerequisites
 
 * An [AWS account](https://portal.aws.amazon.com/billing/signup/resume&client_id=signup)
-* A Amazon [SageMaker Studio domain](https://docs.aws.amazon.com/sagemaker/latest/dg/onboard-quick-start.html) with the `AmazonSageMakerFeatureStoreAccess` anaged policy [attached to the IAM execution role](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_manage-attach-detach.html#add-policies-console)
+* An [Amazon SageMaker Studio domain](https://docs.aws.amazon.com/sagemaker/latest/dg/onboard-quick-start.html) with the `AmazonSageMakerFeatureStoreAccess` managed policy [attached to the IAM execution role](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_manage-attach-detach.html#add-policies-console)
 * An [Amazon S3 Bucket](https://docs.aws.amazon.com/AmazonS3/latest/userguide/create-bucket-overview.html)
 
 
