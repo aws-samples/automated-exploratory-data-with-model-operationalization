@@ -6,7 +6,7 @@ In this repository, we present artifacts corresponding an intelligent framework 
 
 ## Dataset
 
-In order to demonstrate the orchestrated workflow, we use the example of ![Patient Diabetic Readmission Dataset](https://github.com/aws-samples/automated-exploratory-data-with-model-operationalization/tree/main/Dataset/HealthcareDiabeticReadmission.csv). This data comprises of historical representation of patient and hospital outcomes, wherein the goal involves building a machine learning (ML) to predict hospital readmission. The model has to predict whether the high-risk diabetic-patients is likely to get readmitted to hospital after previous encounter within thirty days or after thirty days or not. Since this use case deal with multiple outcomes, this ML problem is called "Multi-class Classification". 
+In order to demonstrate the orchestrated workflow, we use the example of ![Patient Diabetic Readmission Dataset](https://github.com/aws-samples/automated-exploratory-data-with-model-operationalization/blob/main/Dataset/HealthcareDiabeticReadmission.csv). This data comprises of historical representation of patient and hospital outcomes, wherein the goal involves building a machine learning (ML) to predict hospital readmission. The model has to predict whether the high-risk diabetic-patients is likely to get readmitted to hospital after previous encounter within thirty days or after thirty days or not. Since this use case deal with multiple outcomes, this ML problem is called "Multi-class Classification". 
 
 
 ## Prerequisites
@@ -27,7 +27,7 @@ Further, the approach shows deploying the best candidate model and creating the 
 
 Below is the initial setup for data preprocessing step prior to automating the workflow:
 
-![Dataops.png](https://github.com/aws-samples/automated-exploratory-data-with-model-operationalization/tree/main/Images/Dataops.png)
+![Dataops.png](https://github.com/aws-samples/automated-exploratory-data-with-model-operationalization/blob/main/Images/Dataops.png)
 
 This step comprises of data flow initiation to process the raw data stored in S3 bucket. A sequence of steps in the data wrangler UI are created to perform feature engineering on the data. Then, Sagemaker processing job is executed to save the flow to S3 and storing the transformed features into Sagemaker feature Store for reusable purposes.
 
