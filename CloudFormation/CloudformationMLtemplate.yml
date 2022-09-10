@@ -1,0 +1,1460 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: This CloudFormation creates stack for Exploratory Data Analysis sample.
+Parameters:
+  Email:
+    Type: String
+    AllowedPattern: '^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$'
+    ConstraintDescription: Must be a valid email address.
+  BucketName:
+    Type: String
+    Default: healthcare-diabetes-bucket
+  StatemachineName:
+    Type: String
+    Default: HealthcareStateMachine
+
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label:
+          default: Configuration
+        Parameters:
+          - Email
+          - BucketName
+    ParameterLabels:
+      Email:
+        default: Enter Email Address for Notification
+
+Resources:
+  ExecutionApi:
+    Type: 'AWS::ApiGateway::RestApi'
+    Properties:
+      Name: Human approval endpoint
+      Description: HTTP Endpoint backed by API Gateway and Lambda
+      FailOnWarnings: true
+  ExecutionResource:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      RestApiId: !Ref ExecutionApi
+      ParentId: !GetAtt ExecutionApi.RootResourceId
+      PathPart: execution
+  ExecutionMethod:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: GET
+      Integration:
+        Type: AWS
+        IntegrationHttpMethod: POST
+        Uri: !Sub >-
+          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaApprovalFunction.Arn}/invocations
+        IntegrationResponses:
+          - StatusCode: 302
+            ResponseParameters:
+              method.response.header.Location: integration.response.body.headers.Location
+        RequestTemplates:
+          application/json: |
+            {
+              "body" : $input.json('$'),
+              "headers": {
+                #foreach($header in $input.params().header.keySet())
+                "$header": "$util.escapeJavaScript($input.params().header.get($header))" #if($foreach.hasNext),#end
+
+                #end
+              },
+              "method": "$context.httpMethod",
+              "params": {
+                #foreach($param in $input.params().path.keySet())
+                "$param": "$util.escapeJavaScript($input.params().path.get($param))" #if($foreach.hasNext),#end
+
+                #end
+              },
+              "query": {
+                #foreach($queryParam in $input.params().querystring.keySet())
+                "$queryParam": "$util.escapeJavaScript($input.params().querystring.get($queryParam))" #if($foreach.hasNext),#end
+
+                #end
+              }  
+            }
+      ResourceId: !Ref ExecutionResource
+      RestApiId: !Ref ExecutionApi
+      MethodResponses:
+        - StatusCode: 302
+          ResponseParameters:
+            method.response.header.Location: true
+  ApiGatewayAccount:
+    Type: 'AWS::ApiGateway::Account'
+    Properties:
+      CloudWatchRoleArn: !GetAtt ApiGatewayCloudWatchLogsRole.Arn
+  ApiGatewayCloudWatchLogsRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - apigateway.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: ApiGatewayLogsPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:DescribeLogGroups'
+                  - 'logs:DescribeLogStreams'
+                  - 'logs:PutLogEvents'
+                  - 'logs:GetLogEvents'
+                  - 'logs:FilterLogEvents'
+                Resource: !Sub 'arn:${AWS::Partition}:logs:*:*:*'
+  ExecutionApiStage:
+    DependsOn:
+      - ApiGatewayAccount
+    Type: 'AWS::ApiGateway::Stage'
+    Properties:
+      DeploymentId: !Ref ApiDeployment
+      MethodSettings:
+        - DataTraceEnabled: true
+          HttpMethod: '*'
+          LoggingLevel: INFO
+          ResourcePath: /*
+      RestApiId: !Ref ExecutionApi
+      StageName: states
+  ApiDeployment:
+    Type: 'AWS::ApiGateway::Deployment'
+    DependsOn:
+      - ExecutionMethod
+    Properties:
+      RestApiId: !Ref ExecutionApi
+      StageName: DummyStage
+
+  # Lambda that will be invoked by API Gateway
+  LambdaApprovalFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        ZipFile:
+          'Fn::Sub': >
+            const AWS = require('aws-sdk');
+
+            var redirectToStepFunctions = function(lambdaArn, statemachineName,
+            executionName, callback) {
+              const lambdaArnTokens = lambdaArn.split(":");
+              const partition = lambdaArnTokens[1];
+              const region = lambdaArnTokens[3];
+              const accountId = lambdaArnTokens[4];
+
+              console.log("partition=" + partition);
+              console.log("region=" + region);
+              console.log("accountId=" + accountId);
+
+              const executionArn = "arn:" + partition + ":states:" + region + ":" + accountId + ":execution:" + statemachineName + ":" + executionName;
+              console.log("executionArn=" + executionArn);
+
+              const url = "https://console.aws.amazon.com/states/home?region=" + region + "#/executions/details/" + executionArn;
+              callback(null, {
+                  statusCode: 302,
+                  headers: {
+                    Location: url
+                  }
+              });
+            };
+
+
+            exports.handler = (event, context, callback) => {
+              console.log('Event= ' + JSON.stringify(event));
+              const action = event.query.action;
+              const taskToken = event.query.taskToken;
+              const statemachineName = event.query.sm;
+              const executionName = event.query.ex;
+
+              const stepfunctions = new AWS.StepFunctions();
+
+              var message = "";
+
+              if (action === "approve") {
+                message = { "Status": "Approved! Task approved by ${Email}" };
+              } else if (action === "reject") {
+                message = { "Status": "Rejected! Task rejected by ${Email}" };
+              } else {
+                console.error("Unrecognized action. Expected: approve, reject.");
+                callback({"Status": "Failed to process the request. Unrecognized Action."});
+              }
+
+              stepfunctions.sendTaskSuccess({
+                output: JSON.stringify(message),
+                taskToken: event.query.taskToken
+              })
+              .promise()
+              .then(function(data) {
+                redirectToStepFunctions(context.invokedFunctionArn, statemachineName, executionName, callback);
+              }).catch(function(err) {
+                console.error(err, err.stack);
+                callback(err);
+              });
+            }
+      Description: Lambda function that callback to AWS Step Functions
+      FunctionName: LambdaApprovalFunction
+      Handler: index.handler
+      Role: !GetAtt LambdaApiGatewayIAMRole.Arn
+      Runtime: nodejs12.x
+  LambdaApiGatewayInvoke:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !GetAtt LambdaApprovalFunction.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ExecutionApi}/*'
+      
+  LambdaApiGatewayIAMRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      Policies:
+        - PolicyName: CloudWatchLogsPolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:DescribeLogGroups'
+                  - 'logs:DescribeLogStreams'
+                  - 'logs:PutLogEvents'
+                  - 'logs:GetLogEvents'
+                  - 'logs:FilterLogEvents'
+                Resource: !Sub 'arn:${AWS::Partition}:logs:*:*:*'
+        - PolicyName: StepFunctionsPolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'states:SendTaskFailure'
+                  - 'states:SendTaskSuccess'
+                Resource: '*'
+ 
+  
+  SNSHumanApprovalEmailTopic:
+    Type: 'AWS::SNS::Topic'
+    Properties:
+      Subscription:
+        - Endpoint: !Sub '${Email}'
+          Protocol: email
+
+  LambdaHumanApprovalSendEmailFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaSendEmailExecutionRole.Arn
+      Runtime: nodejs12.x
+      Timeout: '25'
+      Code:
+        ZipFile:
+          'Fn::Sub': |
+            console.log('Loading function');
+            const AWS = require('aws-sdk');
+            exports.lambda_handler = (event, context, callback) => {
+                console.log('event= ' + JSON.stringify(event));
+                console.log('context= ' + JSON.stringify(context));
+                
+                // fetching step function parsed parameters across lambda functions
+                const data_bucket = event.data_bucket;
+                const data_key = event.data_key;
+                const flow_bucket = event.flow_bucket;
+                const flow_key = event.flow_key;
+                const pipeline_name = event.pipeline_name;
+                const new_flow_key = event.new_flow_key;
+                const new_flow_uri = event.new_flow_uri;
+    
+
+                const executionContext = event.ExecutionContext;
+                console.log('executionContext= ' + executionContext);
+
+                const executionName = executionContext.Execution.Name;
+                console.log('executionName= ' + executionName);
+
+                const statemachineName = executionContext.StateMachine.Name;
+                console.log('statemachineName= ' + statemachineName);
+
+                const taskToken = executionContext.Task.Token;
+                console.log('taskToken= ' + taskToken);
+
+                const apigwEndpint = event.APIGatewayEndpoint;
+                console.log('apigwEndpint = ' + apigwEndpint)
+
+                const approveEndpoint = apigwEndpint + "/execution?action=approve&ex=" + executionName + "&sm=" + statemachineName + "&taskToken=" + encodeURIComponent(taskToken);
+                console.log('approveEndpoint= ' + approveEndpoint);
+
+                const rejectEndpoint = apigwEndpint + "/execution?action=reject&ex=" + executionName + "&sm=" + statemachineName + "&taskToken=" + encodeURIComponent(taskToken);
+                console.log('rejectEndpoint= ' + rejectEndpoint);
+
+                const emailSnsTopic = "${SNSHumanApprovalEmailTopic}";
+                console.log('emailSnsTopic= ' + emailSnsTopic);
+
+                var emailMessage = 'Welcome! \n\n';
+                emailMessage += 'This is an email requiring an approval for a step functions execution. \n\n'
+                emailMessage += 'Please check the following information and click "Approve" link if you want to approve. \n\n'
+                emailMessage += 'Execution Name -> ' + executionName + '\n\n'
+                emailMessage += 'Approve ' + approveEndpoint + '\n\n'
+                emailMessage += 'Reject ' + rejectEndpoint + '\n\n'
+                emailMessage += 'Thanks for using Step functions!'
+                
+                const sns = new AWS.SNS();
+                var params = {
+                  Message: emailMessage,
+                  Subject: "Required approval from AWS Step Functions",
+                  TopicArn: emailSnsTopic
+                };
+
+                sns.publish(params)
+                  .promise()
+                  .then(function(data) {
+                    console.log("MessageID is " + data.MessageId);
+                    callback(null);
+                  }).catch(
+                    function(err) {
+                    console.error(err, err.stack);
+                    callback(err);
+                  });
+                
+                var step_dict = {'new_flow_key': new_flow_key, 
+                    'data_bucket': data_bucket,
+                    'data_key': data_key,
+                    'new_flow_uri': new_flow_uri, 
+                    'flow_bucket': flow_bucket, 
+                    'flow_key': flow_key, 
+                    'pipeline_name': pipeline_name};
+      
+                return step_dict;
+            }
+            
+  LambdaStateMachineExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: StatesExecutionPolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'lambda:InvokeFunction'
+                Resource: "*"
+        - PolicyName: StateMachineLogPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:DescribeLogGroups"
+                  - "logs:DescribeLogStreams"
+                  - "logs:PutLogEvents"
+                  - "logs:GetLogEvents"
+                  - "logs:FilterLogEvents"
+                Resource: !Sub "arn:${AWS::Partition}:logs:*:*:*"
+          
+  LambdaSendEmailExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: CloudWatchLogsPolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: !Sub 'arn:${AWS::Partition}:logs:*:*:*'
+        - PolicyName: SNSSendEmailPolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'SNS:Publish'
+                Resource:
+                  - !Sub '${SNSHumanApprovalEmailTopic}'              
+                  
+  EventsRule:
+        Type: "AWS::Events::Rule"
+        Properties:
+            Name: "CloudWatchLambdaEventMail"
+            ScheduleExpression: "rate(1 minute)"
+            State: "ENABLED"
+            Targets: 
+              - 
+                Arn: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:ManualStepActivity"
+                Id: "1425eaa1-3b10-4293-a9bf-46d83bf93bc1"
+            EventBusName: "default"
+
+  # Notification API for approval endpoint  
+  
+  NotificationApi:
+        Type: "AWS::ApiGateway::RestApi"
+        Properties:
+            Name: "Notification API"
+            Description: "Notification API for approval endpoint with Step Function"
+            ApiKeySourceType: "HEADER"
+            EndpointConfiguration: 
+                Types: 
+                  - "REGIONAL"
+  
+  NotificationApiDeployment:
+        Type: AWS::ApiGateway::Deployment
+        Properties:
+            RestApiId: !Ref NotificationApi
+        DependsOn:
+          - NotificationApifailGET
+          - NotificationApifail
+          - NotificationApisucceedGET
+          - NotificationApisucceed
+  
+  NotificationApiDeploymentStageprod:
+        Type: AWS::ApiGateway::Stage
+        Properties:
+          RestApiId: !Ref NotificationApi
+          DeploymentId: !Ref NotificationApiDeployment
+          StageName: APIStep
+
+  NotificationApisucceed:
+        Type: AWS::ApiGateway::Resource
+        Properties:
+          ParentId: !GetAtt NotificationApi.RootResourceId
+          PathPart: succeed
+          RestApiId: !Ref NotificationApi
+
+  NotificationApisucceedGETStartSyncExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+        Version: "2012-10-17"
+
+  NotificationApisucceedGETStartSyncExecutionRoleDefaultPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action: states:StartSyncExecution
+            Effect: Allow
+            Resource: !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${StatemachineName}
+        Version: "2012-10-17"
+      PolicyName: NotificationApisucceedGETStartSyncExecutionRoleDefaultPolicy
+      Roles: [!Ref NotificationApisucceedGETStartSyncExecutionRole]
+
+  NotificationApisucceedGET:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      HttpMethod: GET
+      RequestParameters:
+        method.request.querystring.taskToken: false
+      ResourceId: !Ref NotificationApisucceed
+      RestApiId: !Ref NotificationApi
+      AuthorizationType: NONE
+      Integration:
+        Credentials: !GetAtt NotificationApisucceedGETStartSyncExecutionRole.Arn
+        IntegrationHttpMethod: POST
+        IntegrationResponses:
+          - ResponseTemplates:
+              application/json: |-
+                #set($inputRoot = $input.path('$'))
+                #if($input.path('$.status').toString().equals("FAILED"))
+                #set($context.responseOverride.status = 500)
+                {
+                "error": "$input.path('$.error')",
+                "cause": "$input.path('$.cause')"
+                }
+                #else
+                $input.path('$.output')
+                #end
+            StatusCode: "200"
+        PassthroughBehavior: WHEN_NO_TEMPLATES
+        RequestTemplates:
+          application/json:
+            !Join
+              - ""
+              - - |-
+                  ## Velocity Template used for API Gateway request mapping template
+                  ##
+                  ## This template forwards the request body, header, path, and querystring
+                  ## to the execution input of the state machine.
+                  ##
+                  ## "@@" is used here as a placeholder for '"' to avoid using escape characters.
+
+                  #set($inputString = '')
+                  #set($includeHeaders = false)
+                  #set($includeQueryString = true)
+                  #set($includePath = true)
+                  #set($includeAuthorizer = false)
+                  #set($allParams = $input.params())
+                  {
+                      "stateMachineArn": "
+                - !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${StatemachineName}
+                - |
+                  ",
+
+                      #set($inputString = "$inputString,@@body@@: $input.body")
+
+                      #if ($includeHeaders)
+                          #set($inputString = "$inputString, @@header@@:{")
+                          #foreach($paramName in $allParams.header.keySet())
+                              #set($inputString = "$inputString @@$paramName@@: @@$util.escapeJavaScript($allParams.header.get($paramName))@@")
+                              #if($foreach.hasNext)
+                                  #set($inputString = "$inputString,")
+                              #end
+                          #end
+                          #set($inputString = "$inputString }")
+                          
+                      #end
+
+                      #if ($includeQueryString)
+                          #set($inputString = "$inputString, @@querystring@@:{")
+                          #foreach($paramName in $allParams.querystring.keySet())
+                              #set($inputString = "$inputString @@$paramName@@: @@$util.escapeJavaScript($allParams.querystring.get($paramName))@@")
+                              #if($foreach.hasNext)
+                                  #set($inputString = "$inputString,")
+                              #end
+                          #end
+                          #set($inputString = "$inputString }")
+                      #end
+
+                      #if ($includePath)
+                          #set($inputString = "$inputString, @@path@@:{")
+                          #foreach($paramName in $allParams.path.keySet())
+                              #set($inputString = "$inputString @@$paramName@@: @@$util.escapeJavaScript($allParams.path.get($paramName))@@")
+                              #if($foreach.hasNext)
+                                  #set($inputString = "$inputString,")
+                              #end
+                          #end
+                          #set($inputString = "$inputString }")
+                      #end
+                      
+                      #if ($includeAuthorizer)
+                          #set($inputString = "$inputString, @@authorizer@@:{")
+                          #foreach($paramName in $context.authorizer.keySet())
+                              #set($inputString = "$inputString @@$paramName@@: @@$util.escapeJavaScript($context.authorizer.get($paramName))@@")
+                              #if($foreach.hasNext)
+                                  #set($inputString = "$inputString,")
+                              #end
+                          #end
+                          #set($inputString = "$inputString }")
+                      #end
+
+                      #set($requestContext = "")
+                      ## Check if the request context should be included as part of the execution input
+                      #if($requestContext && !$requestContext.empty)
+                          #set($inputString = "$inputString,")
+                          #set($inputString = "$inputString @@requestContext@@: $requestContext")
+                      #end
+
+                      #set($inputString = "$inputString}")
+                      #set($inputString = $inputString.replaceAll("@@",'"'))
+                      #set($len = $inputString.length() - 1)
+                      "input": "{$util.escapeJavaScript($inputString.substring(1,$len)).replaceAll("\\'","'")}"
+                  }
+        Type: AWS
+        Uri: !Sub >-
+          arn:aws:apigateway:${AWS::Region}:states:action/StartSyncExecution 
+      MethodResponses:
+        - ResponseModels:
+            application/json: Empty
+          StatusCode: "200"
+
+
+  NotificationApifail:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt NotificationApi.RootResourceId
+      PathPart: fail
+      RestApiId: !Ref NotificationApi
+
+  NotificationApifailGETStartSyncExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+        Version: "2012-10-17"
+  
+  NotificationApifailGETStartSyncExecutionRoleDefaultPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action: states:StartSyncExecution
+            Effect: Allow
+            Resource: !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${StatemachineName}
+        Version: "2012-10-17"
+      PolicyName: NotificationApifailGETStartSyncExecutionRoleDefaultPolicy
+      Roles: [!Ref NotificationApifailGETStartSyncExecutionRole]
+
+  NotificationApifailGET:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      HttpMethod: GET
+      RequestParameters:
+        method.request.querystring.taskToken: false
+      ResourceId: !Ref NotificationApifail
+      RestApiId: !Ref NotificationApi
+      AuthorizationType: NONE
+      Integration:
+        Credentials: !GetAtt NotificationApifailGETStartSyncExecutionRole.Arn
+        IntegrationHttpMethod: POST
+        IntegrationResponses:
+          - ResponseTemplates:
+              application/json: |-
+                #set($inputRoot = $input.path('$'))
+                #if($input.path('$.status').toString().equals("FAILED"))
+                #set($context.responseOverride.status = 500)
+                {
+                "error": "$input.path('$.error')",
+                "cause": "$input.path('$.cause')"
+                }
+                #else
+                $input.path('$.output')
+                #end
+            StatusCode: "200"
+        PassthroughBehavior: WHEN_NO_TEMPLATES
+        RequestTemplates:
+          application/json:
+            !Join
+              - ""
+              - - |-
+                  ## Velocity Template used for API Gateway request mapping template
+                  ##
+                  ## This template forwards the request body, header, path, and querystring
+                  ## to the execution input of the state machine.
+                  ##
+                  ## "@@" is used here as a placeholder for '"' to avoid using escape characters.
+
+                  #set($inputString = '')
+                  #set($includeHeaders = false)
+                  #set($includeQueryString = true)
+                  #set($includePath = true)
+                  #set($includeAuthorizer = false)
+                  #set($allParams = $input.params())
+                  {
+                      "stateMachineArn": "
+                - !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${StatemachineName}
+                - |
+                  ",
+
+                      #set($inputString = "$inputString,@@body@@: $input.body")
+
+                      #if ($includeHeaders)
+                          #set($inputString = "$inputString, @@header@@:{")
+                          #foreach($paramName in $allParams.header.keySet())
+                              #set($inputString = "$inputString @@$paramName@@: @@$util.escapeJavaScript($allParams.header.get($paramName))@@")
+                              #if($foreach.hasNext)
+                                  #set($inputString = "$inputString,")
+                              #end
+                          #end
+                          #set($inputString = "$inputString }")
+                          
+                      #end
+
+                      #if ($includeQueryString)
+                          #set($inputString = "$inputString, @@querystring@@:{")
+                          #foreach($paramName in $allParams.querystring.keySet())
+                              #set($inputString = "$inputString @@$paramName@@: @@$util.escapeJavaScript($allParams.querystring.get($paramName))@@")
+                              #if($foreach.hasNext)
+                                  #set($inputString = "$inputString,")
+                              #end
+                          #end
+                          #set($inputString = "$inputString }")
+                      #end
+
+                      #if ($includePath)
+                          #set($inputString = "$inputString, @@path@@:{")
+                          #foreach($paramName in $allParams.path.keySet())
+                              #set($inputString = "$inputString @@$paramName@@: @@$util.escapeJavaScript($allParams.path.get($paramName))@@")
+                              #if($foreach.hasNext)
+                                  #set($inputString = "$inputString,")
+                              #end
+                          #end
+                          #set($inputString = "$inputString }")
+                      #end
+                      
+                      #if ($includeAuthorizer)
+                          #set($inputString = "$inputString, @@authorizer@@:{")
+                          #foreach($paramName in $context.authorizer.keySet())
+                              #set($inputString = "$inputString @@$paramName@@: @@$util.escapeJavaScript($context.authorizer.get($paramName))@@")
+                              #if($foreach.hasNext)
+                                  #set($inputString = "$inputString,")
+                              #end
+                          #end
+                          #set($inputString = "$inputString }")
+                      #end
+
+                      #set($requestContext = "")
+                      ## Check if the request context should be included as part of the execution input
+                      #if($requestContext && !$requestContext.empty)
+                          #set($inputString = "$inputString,")
+                          #set($inputString = "$inputString @@requestContext@@: $requestContext")
+                      #end
+
+                      #set($inputString = "$inputString}")
+                      #set($inputString = $inputString.replaceAll("@@",'"'))
+                      #set($len = $inputString.length() - 1)
+                      "input": "{$util.escapeJavaScript($inputString.substring(1,$len)).replaceAll("\\'","'")}"
+                  }
+        Type: AWS
+        Uri: !Sub >-
+          arn:aws:apigateway:${AWS::Region}:states:action/StartSyncExecution
+      MethodResponses:
+        - ResponseModels:
+            application/json: Empty
+          StatusCode: "200"
+
+  # Notification on new file upload and state machine initiation
+  SNSTopic2:
+        Type: "AWS::SNS::Topic"
+        Properties:
+            DisplayName: ""
+            TopicName: "topic-lambda-s3-sns"
+            Subscription:
+              - Endpoint: !Sub '${Email}'
+                Protocol: email
+  
+  # S3 bucket where new data file will be uploaded
+  Bucket:
+        Type: "AWS::S3::Bucket"
+        DependsOn:
+            - LambdaPermission
+        Properties:
+            BucketName: !Ref BucketName
+            PublicAccessBlockConfiguration:
+              RestrictPublicBuckets: TRUE
+              IgnorePublicAcls: TRUE
+              BlockPublicPolicy: TRUE
+              BlockPublicAcls: TRUE
+            NotificationConfiguration: 
+                LambdaConfigurations: 
+                  - 
+                    Event: "s3:ObjectCreated:Put"
+                    Function: !GetAtt LambdaStepFunctionsTriggerFunction.Arn
+                    Filter: 
+                        S3Key: 
+                            Rules: 
+                              - 
+                                Name: "Prefix"
+                                Value: "healthcare/flow"
+                    
+
+  LambdaPermission:
+        Type: "AWS::Lambda::Permission"
+        Properties:
+            Action: "lambda:InvokeFunction"
+            FunctionName: !Ref LambdaStepFunctionsTriggerFunction
+            Principal: "s3.amazonaws.com"
+            SourceArn: !Sub "arn:aws:s3:::${BucketName}"
+            SourceAccount: !Ref 'AWS::AccountId' 
+
+  #Lambda Function IAM role for S3, SNS, Step functions and Sagemaker pipelines
+  smlambdarole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: "sts:AssumeRole"
+          - Effect: Allow
+            Principal: 
+              Service: sagemaker.amazonaws.com
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: StepFunctionPolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "states:CreateActivity"
+                  - "states:StartExecution"
+                  - "states:CreateStateMachine"
+                  - "states:Delete*"
+                  - "states:Describe*"
+                  - "states:Get*"
+                  - "states:Stop*"
+                  - "states:List*"
+                  - "states:Send*"
+                  - "states:UpdateStateMachine"
+                Resource: !Sub "arn:aws:states:*:*:stateMachine:*"
+        - PolicyName: S3Policy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "s3:GetObject"
+                  - "s3:PutObject"
+                  - "s3:ListBucket"
+                  - "s3:GetBucketLocation"
+                  - "s3:ListAllMyBuckets"
+                  - "s3:DeleteObject"
+                Resource: !Sub "arn:aws:s3:::${BucketName}/*"
+        - PolicyName: S3sagemakerpolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "s3:GetObject"
+                  - "s3:PutObject"
+                  - "s3:ListBucket"
+                  - "s3:GetBucketLocation"
+                  - "s3:ListAllMyBuckets"
+                  - "s3:DeleteObject"
+                Resource: 
+                  - !Sub "arn:aws:s3:::sagemaker-${AWS::Region}-${AWS::AccountId}/*"
+                  - !Sub "arn:aws:s3:::sagemaker-${AWS::Region}-${AWS::AccountId}"
+        - PolicyName: CloudWatchLogsPolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: !Sub "arn:${AWS::Partition}:logs:*:*:*"
+        - PolicyName: SNSSendEmailPolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "SNS:Publish"
+                Resource: !Sub "${SNSTopic2}"
+        - PolicyName: SageMakerPolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "sagemaker:CreateAutoMLJob"
+                  - "sagemaker:DescribeAutoMLJob"
+                  - "sagemaker:CreateAppImageConfig"
+                  - "sagemaker:CreateEndpointConfig"
+                  - "sagemaker:CreateHyperParameterTuningJob"
+                  - "sagemaker:CreateImage"
+                  - "sagemaker:CreateModel"
+                  - "sagemaker:CreateModelPackageGroup"
+                  - "sagemaker:CreateNotebookInstance"
+                  - "sagemaker:CreatePipeline"
+                  - "sagemaker:CreateProcessingJob"
+                  - "sagemaker:CreateStudioLifecycleConfig"
+                  - "sagemaker:CreateTrainingJob"
+                  - "sagemaker:CreateTransformJob"
+                  - "sagemaker:CreateUserProfile"
+                  - "sagemaker:DeleteApp"
+                  - "sagemaker:DeleteDomain"
+                  - "sagemaker:CreateDomain"
+                  - "sagemaker:DeleteEndpoint"
+                  - "sagemaker:DeleteEndpointConfig"
+                  - "sagemaker:DeleteFlowDefinition"
+                  - "sagemaker:DeleteModel"
+                  - "sagemaker:DeletePipeline"
+                  - "sagemaker:DescribeApp"
+                  - "sagemaker:DescribeDomain"
+                  - "sagemaker:DescribeEndpoint"
+                  - "sagemaker:DescribeEndpointConfig"
+                  - "sagemaker:DescribeFlowDefinition"
+                  - "sagemaker:DescribeImage"
+                  - "sagemaker:DescribeModel"
+                  - "sagemaker:DescribeModelPackage"
+                  - "sagemaker:DescribeModelPackageGroup"
+                  - "sagemaker:DescribeNotebookInstance"
+                  - "sagemaker:DescribePipeline"
+                  - "sagemaker:DescribePipelineDefinitionForExecution"
+                  - "sagemaker:DescribePipelineExecution"
+                  - "sagemaker:DescribeProcessingJob"
+                  - "sagemaker:DescribeTrainingJob"
+                  - "sagemaker:DescribeTransformJob"
+                  - "sagemaker:DescribeUserProfile" 
+                  - "sagemaker:InvokeEndpoint"
+                  - "sagemaker:ListEndpoints"
+                  - "sagemaker:ListEndpointConfigs"
+                  - "sagemaker:ListModelPackages"
+                  - "sagemaker:ListModels"
+                  - "sagemaker:ListNotebookInstances"
+                  - "sagemaker:ListPipelineExecutions"
+                  - "sagemaker:ListPipelines"
+                  - "sagemaker:ListProcessingJobs"
+                  - "sagemaker:ListTrainingJobs"
+                  - "sagemaker:ListTrainingJobsForHyperParameterTuningJob"
+                  - "sagemaker:ListTransformJobs"
+                  - "sagemaker:PutModelPackageGroupPolicy"
+                  - "sagemaker:RetryPipelineExecution"
+                  - "sagemaker:SendPipelineExecutionStepFailure"
+                  - "sagemaker:SendPipelineExecutionStepSuccess"
+                  - "sagemaker:StartPipelineExecution"
+                  - "sagemaker:StopHyperParameterTuningJob"
+                  - "sagemaker:StopNotebookInstance"
+                  - "sagemaker:StopPipelineExecution"
+                  - "sagemaker:StopProcessingJob"
+                  - "sagemaker:StopTrainingJob"
+                  - "sagemaker:StopTransformJob"
+                  - "sagemaker:UpdateDomain"
+                  - "sagemaker:UpdateEndpoint"
+                  - "sagemaker:UpdateModelPackage"
+                  - "sagemaker:UpdateImage"
+                  - "sagemaker:UpdatePipeline"
+                  - "sagemaker:UpdateNotebookInstance"
+                  - "sagemaker:UpdateUserProfile"
+                Resource: "*"
+
+  IAMPassRolePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action: 
+              - "iam:GetRole"
+              - "iam:PassRole"
+            Effect: Allow
+            Resource: !GetAtt smlambdarole.Arn
+        Version: "2012-10-17"
+      PolicyName: IAMPassRolePolicy
+      Roles: [!Ref smlambdarole]
+
+  LambdaVersion:
+        Type: "AWS::Lambda::Version"
+        Properties:
+            Description: "AWS Lambda function for automatically triggering AWS Step Functions"
+            FunctionName: !Ref LambdaStepFunctionsTriggerFunction
+
+  LambdaEventInvokeConfig:
+        Type: "AWS::Lambda::EventInvokeConfig"
+        Properties:
+            DestinationConfig: 
+                OnSuccess: 
+                    Destination: !Ref SNSTopic2
+            FunctionName: !Ref LambdaStepFunctionsTriggerFunction
+            Qualifier: "$LATEST"
+
+ # AWS Lambda function for automatically triggering AWS StepFunction on new file upload to S3
+  LambdaStepFunctionsTriggerFunction:
+        Type: "AWS::Lambda::Function"
+        Properties:
+            Description: "AWS Lambda function for automatically triggering AWS StepFunction"
+            Environment: 
+                Variables: 
+                    flow_key: !Sub "sagemaker-${AWS::Region}-${AWS::AccountId}/data_wrangler_flows/"
+                    flow_bucket: !Sub "sagemaker-${AWS::Region}-${AWS::AccountId}"
+                    SNS_ARN: !Ref SNSTopic2
+                    MY_STATE_MACHINE_ARN: !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${StatemachineName}
+            FunctionName: "LambdaStepFunctionsTriggerFunction"
+            Handler: "index.lambda_handler"
+            Code: 
+               ZipFile: !Sub |  
+                  import json
+                  import boto3
+                  import os
+                  
+                  
+                  s3 = boto3.resource('s3')
+                  sns= boto3.client('sns')
+                  sf = boto3.client('stepfunctions')
+                  
+                  def lambda_handler(event, context):
+                  
+                      #Get location for where the new data (csv) file was uploaded
+                      data_bucket = event['Records'][0]['s3']['bucket']['name']
+                      data_key = event['Records'][0]['s3']['object']['key']
+                      print(f"A new file named {data_key} was just uploaded to Amazon S3 in {data_bucket}")
+                      
+                      input_dict = {'data_bucket': data_bucket, 'data_key': data_key}
+                  
+                      # ---------------------------------------------------#
+                  
+                      # Initiate the Step function
+                      my_state_machine_arn = os.environ['MY_STATE_MACHINE_ARN']
+                      client = boto3.client('stepfunctions')
+                      response = sf.start_execution(stateMachineArn=my_state_machine_arn, input = json.dumps(input_dict))
+                      print("response is : ")
+                      print(response)
+                      print("\n Input Dictionary: ")
+                      print(input_dict)
+                  
+                      return('Step function has been successfully initiated')
+                      
+            MemorySize: 128
+            Role: !GetAtt smlambdarole.Arn
+            Runtime: "python3.9"
+            Timeout: 30
+            TracingConfig: 
+                Mode: "PassThrough"
+            EphemeralStorage: 
+                Size: 512
+
+ # AWS Lambda Function for automatically triggering data wrangler operation within step function
+  LambdaWranglerAutomateFunction:
+        Type: "AWS::Lambda::Function"
+        Properties:
+            Description: "Lambda Function for Automating Data Wrangler Operation"
+            Environment: 
+                Variables: 
+                    APIGatewayEndpointARN: !Sub "https://${ExecutionApi}.execute-api.${AWS::Region}.amazonaws.com/states"
+                    flow_key: !Sub "sagemaker-${AWS::Region}-${AWS::AccountId}/data_wrangler_flows/"
+                    flow_bucket: !Sub "sagemaker-${AWS::Region}-${AWS::AccountId}"
+                    SNS_ARN: !Ref SNSTopic2
+                    pipeline_name: "ENTER_FEATURE_STORE_PIPELINE_NAME"
+                    pipeline_name2: "ENTER_S3_PIPELINE_NAME"
+                    MY_STATE_MACHINE_ARN: !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${StatemachineName}
+            FunctionName: "LambdaWranglerAutomateFunction"
+            Handler: "index.lambda_handler"
+            Code:
+                ZipFile: !Sub |
+                    import json
+                    import boto3
+                    import os
+
+                    s3 = boto3.resource('s3')
+                    sm = boto3.client('sagemaker')
+                    sns= boto3.client('sns')
+                    sf = boto3.client('stepfunctions')
+
+                    def lambda_handler(event, context):
+                        
+                        data_bucket = event['data_bucket']
+                        data_key = event['data_key']
+                        
+                        #Update values for where Data Wrangler .flow is saved
+                        flow_bucket = os.environ['flow_bucket']
+                        #flow_key = os.environ['flow_key']
+                        flowfilelocation=s3.Bucket(flow_bucket)
+    
+                        for object_summary in flowfilelocation.objects.filter(Prefix='data_wrangler_flows/'):
+                            key = object_summary.key
+                            if key.endswith(".flow"):
+                                print(key)
+                        
+                        flow_key=key
+                        pipeline_name = os.environ['pipeline_name']
+                        pipeline_name2 = os.environ['pipeline_name2']
+                        
+                        execution_display = f"{data_key.split('/')[-1].replace('_','').replace('.csv','')}"
+                        
+                        #Get .flow file from Amazon S3
+                        get_object = s3.Object(flow_bucket,flow_key)
+                        get_flow = get_object.get()
+                    
+                        #Read, update and save the .flow file
+                        flow_content = json.loads(get_flow['Body'].read())
+                        flow_content['nodes'][0]['parameters']['dataset_definition']['name'] = data_key.split('/')[-1]
+                        flow_content['nodes'][0]['parameters']['dataset_definition']['s3ExecutionContext']['s3Uri'] = f"s3://{data_bucket}/{data_key}"
+                        new_flow_key = flow_key.replace('.flow', '-' + data_key.split('/')[-1].replace('.csv','') + '.flow')
+                        new_flow_uri = f"s3://{flow_bucket}/{new_flow_key}"
+                        put_object = s3.Object(flow_bucket,new_flow_key)
+                        put_flow = put_object.put(Body=json.dumps(flow_content))
+                        print("new flow uri is: " + str(new_flow_uri))
+                        
+                        # ---------------------------------------------------#
+                        
+                        #Send SNS Notification to the authorized person
+                        sns_message = str("This Email Represents a File with datawrangler - found in one of Your Bucket \n\n BUCKET NAME: "+ flow_bucket +"\n\n FILE NAME: " + new_flow_key + "\n\n" 
+                        + " You can download the New Wrangler flow file generated in the bucket, and inspect on the new dataset in Sagemaker Studio.")
+                        message="This file got uploaded: " + new_flow_key + " to this bucket : " + flow_bucket 
+                        print(message)
+                        subject= "S3 Bucket[" + flow_bucket + "] "
+                        sns_response = sns.publish(
+                            TargetArn=os.environ['SNS_ARN'],
+                            Message= str(sns_message),
+                            Subject= str(subject))
+                        
+                        # Parsing API Gateway endpoint as parsing parameter for Step function Human intervention flow
+                        APIGatewayEndpoint = os.environ['APIGatewayEndpointARN']
+                        step_dict = {'data_bucket': data_bucket, 'data_key': data_key, 'flow_bucket' : flow_bucket, 'flow_key' : flow_key, 'pipeline_name':  pipeline_name, 'pipeline_name2': pipeline_name2, 'new_flow_key': new_flow_key, 'new_flow_uri': new_flow_uri, 'APIGatewayEndpoint': APIGatewayEndpoint }
+                     
+                        out = step_dict
+                        return(out)
+                                  
+            MemorySize: 128
+            Role: !GetAtt smlambdarole.Arn
+            Runtime: "python3.9"
+            Timeout: 120
+            TracingConfig: 
+                Mode: "PassThrough"
+            EphemeralStorage: 
+                Size: 512
+  
+
+  # AWS Lambda Function for invoking the 2 Sagemaker pipelines 
+  LambdaPipelineExecutionFunction:
+        Type: "AWS::Lambda::Function"
+        Properties:
+            Description: "Lambda Function to execute Sagemaker Pipelines"
+            FunctionName: "LambdaPipelineExecutionFunction"
+            Handler: "index.lambda_handler"
+            Code: 
+                ZipFile: !Sub |
+                  import json
+                  import boto3
+                  import os
+                  
+                  s3 = boto3.resource('s3')
+                  sm = boto3.client('sagemaker')
+                  sns =boto3.client('sns')
+                  s3_client= boto3.client('s3')
+                  
+                  
+                  def lambda_handler(event, context):
+                  
+                      #Check version of Boto3 - It must be at least 1.16.55
+                      print(f"The version of Boto3 is {boto3.__version__}")
+                      
+                      data_bucket = event['data_bucket']
+                      data_key = event['data_key']
+                      flow_bucket = event['flow_bucket']
+                      flow_key = event['flow_key']
+                      new_flow_key=event['new_flow_key']
+                      pipeline_name = event['pipeline_name']
+                      new_flow_uri = f"s3://{flow_bucket}/{new_flow_key}"
+                      pipeline_name2 = event['pipeline_name2']
+                      
+                      
+                      #Start the pipeline execution
+                      start_pipeline = sm.start_pipeline_execution(
+                                          PipelineName=pipeline_name,
+                                          PipelineExecutionDisplayName="HealthcareReadmissionFeatureStore",
+                                          PipelineParameters=[
+                                              {
+                                                  'Name': 'InputFlow',
+                                                  'Value': new_flow_uri
+                                              },
+                                          ],
+                                          PipelineExecutionDescription="healthcare data readmission Feature Store Flow"
+                                          )
+                      print(start_pipeline)
+                      print("SageMaker Pipeline for feature Store has been successfully created")
+                      
+                      start_pipeline2 = sm.start_pipeline_execution(
+                                          PipelineName=pipeline_name2,
+                                          PipelineExecutionDisplayName="DataWranglerProcessing",
+                                          PipelineParameters=[
+                                              {
+                                                  'Name': 'InputFlow',
+                                                  'Value': new_flow_uri
+                                              },
+                                          ],
+                                          PipelineExecutionDescription="healthcare data readmission csv flow"
+                                          )
+                      print(start_pipeline2)
+                      print("SageMaker Pipeline for processing to S3 has been successfully created")
+    
+            MemorySize: 128
+            Role: !GetAtt smlambdarole.Arn
+            Runtime: "python3.9"
+            Timeout: 900
+            TracingConfig: 
+                Mode: "PassThrough"
+            EphemeralStorage: 
+                Size: 512
+
+  LambdaAutomlEndpointFunction:
+        Type: "AWS::Lambda::Function"
+        Properties:
+            Description: "Function to automate Autopilot job creation"
+            Environment: 
+                Variables: 
+                    sagemaker_role: !GetAtt smlambdarole.Arn
+            FunctionName: "LambdaAutomlEndpointFunction"
+            Handler: "index.lambda_handler"
+            Code: 
+                ZipFile: !Sub |
+                  import json
+                  import boto3
+                  import os
+                  import urllib.parse
+                  from time import gmtime, strftime, sleep
+                  
+                  sm = boto3.client('sagemaker')
+                  sns = boto3.client('sns')
+                  s3 = boto3.client('s3')
+                  region = os.environ['AWS_REGION']
+                  s3_client = boto3.resource('s3', region_name=region)
+                  
+                  def lambda_handler(event, context):
+                      
+                      try:
+                          #Get AWS Account-ID of the user 
+                          aws_account_id = context.invoked_function_arn.split(":")[4]
+                          bucket_name= "sagemaker-" + str(region) + "-" + str(aws_account_id)
+                          
+                          bucket = s3_client.Bucket(bucket_name)
+                          
+                          for object_summary in bucket.objects.filter(Prefix="WrangledOutput/"):
+                              key = object_summary.key
+                              if key.endswith(".csv"):
+                                  print(key)
+                              
+                          obj = s3_client.Object(bucket, key= key)
+                          
+                          timestamp_suffix = strftime('%d-%H-%M', gmtime())
+                      
+                       #create automl experiment
+                          
+                          default_autopilot_job_name = f'aws-autopilot-{timestamp_suffix}'
+                          autopilot_job_name = f'autopilot-healthcare-{timestamp_suffix}'
+                          input_data= f"s3://{bucket.name}/{key}" 
+                          print ("input data is " + str(input_data))
+                          
+                          target_column = 'readmitted'
+                          job_execution_role = os.environ['sagemaker_role']
+                          output_path = f's3://{bucket.name}/AutoPilotJob/'
+                          
+                          
+                          autopilot_job_config: dict = {
+                              'CompletionCriteria': {
+                                  'MaxRuntimePerTrainingJobInSeconds': 500, #600 before
+                                  'MaxCandidates': 2,
+                                  'MaxAutoMLJobRuntimeInSeconds': 4500 #5400
+                                      }
+                                  }
+                          
+                          
+                          autopilot_input_data_config = [
+                              {
+                                  'DataSource': {
+                                      'S3DataSource': {
+                                          'S3DataType': 'S3Prefix',
+                                          'S3Uri': input_data
+                                      }
+                                  },
+                                  'TargetAttributeName': target_column
+                              }
+                          ]
+                  
+                          autopilot_output_data_config = {
+                              'S3OutputPath': output_path
+                          }
+                          
+                          autopilot_model_deploy_config = { 
+                          'AutoGenerateEndpointName': False,
+                          'EndpointName' : 'AutopilotHealthcareEndpoint-v2'
+                          }
+                          
+                          # Tags="autopilot_job"
+                          response = sm.create_auto_ml_job(
+                              AutoMLJobName=autopilot_job_name,
+                              InputDataConfig=autopilot_input_data_config,
+                              OutputDataConfig=autopilot_output_data_config,
+                              AutoMLJobConfig=autopilot_job_config,
+                              ModelDeployConfig = autopilot_model_deploy_config,
+                              RoleArn=os.environ['sagemaker_role']
+                              )
+                          
+                          
+                          describe_response = sm.describe_auto_ml_job(AutoMLJobName=autopilot_job_name)
+                          
+                          print(describe_response["AutoMLJobStatus"] + " - " + describe_response["AutoMLJobSecondaryStatus"])
+                          job_run_status = describe_response["AutoMLJobStatus"]
+                  
+                          print('SageMaker model training has been successfully completed')
+                          
+                          return
+                          {
+                  	            'AutopilotJobName': autopilot_job_name,
+                  	            'AutopilotJobArn': response['AutoMLJobArn']
+                          }
+                          
+                      except Exception as e:
+                          print(e)
+                          print('Error getting object {} from bucket {}. Make sure they exist and your bucket is in the same region as this function.'.format(key, bucket))
+                          raise e 
+    
+            MemorySize: 128
+            Role: !GetAtt smlambdarole.Arn
+            Runtime: "python3.9"
+            Timeout: 60
+            TracingConfig: 
+                Mode: "PassThrough"
+            EphemeralStorage: 
+                Size: 512
+ 
+#Begin state machine that publishes to Lambda and sends an email with the link for approval
+  StepFunctionsStateMachine:
+        Type: "AWS::StepFunctions::StateMachine"
+        Properties:
+            StateMachineName: !Sub ${StatemachineName}
+            RoleArn: !GetAtt LambdaStateMachineExecutionRole.Arn
+            DefinitionString:
+              Fn::Sub: |
+                {
+                  "StartAt": "Auto-ETL Processing",
+                  "TimeoutSeconds": 3600,
+                  "States": {
+                    "Auto-ETL Processing": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::lambda:invoke",
+                      "Parameters": {
+                        "Payload.$": "$",
+                        "FunctionName": "${LambdaWranglerAutomateFunction.Arn}:$LATEST"
+                      },
+                      "Retry": [
+                        {
+                          "ErrorEquals": [
+                            "Lambda.ServiceException",
+                            "Lambda.AWSLambdaException",
+                            "Lambda.SdkClientException"
+                          ],
+                          "IntervalSeconds": 2,
+                          "MaxAttempts": 6,
+                          "BackoffRate": 2
+                        }
+                      ],
+                      "Next": "ETL Callback Approval",
+                      "OutputPath": "$.Payload"
+                    },
+                    "ETL Callback Approval": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+                      "Parameters": {
+                        "FunctionName": "${LambdaHumanApprovalSendEmailFunction.Arn}",
+                        "Payload": {
+                          "data_bucket.$": "$.data_bucket",
+                          "ExecutionContext.$": "$$",
+                          "data_key.$": "$.data_key",
+                          "APIGatewayEndpoint.$": "$.APIGatewayEndpoint",
+                          "pipeline_name.$": "$.pipeline_name",
+                          "pipeline_name2.$": "$.pipeline_name2",
+                          "new_flow_uri.$": "$.new_flow_uri",
+                          "new_flow_key.$": "$.new_flow_key"
+                        }
+                      },
+                      "Next": "ManualApprovalChoiceState",
+                      "ResultPath": "$.Payload"
+                    },
+                    "ManualApprovalChoiceState": {
+                      "Type": "Choice",
+                      "Choices": [
+                        {
+                          "Variable": "$.Payload.Status",
+                          "StringEquals": "Approved! Task approved by ${Email}", 
+                          "Next": "Sagemaker-Pipeline-execute"
+                        },
+                        {
+                          "Variable": "$.Payload.Status",
+                          "StringEquals": "Rejected! Task rejected by ${Email}",
+                          "Next": "RejectedPassState"
+                        }
+                      ],
+                      "Default": "RejectedPassState"
+                    },
+                    "Sagemaker-Pipeline-execute": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::lambda:invoke",
+                      "Parameters": {
+                        "FunctionName": "${LambdaPipelineExecutionFunction.Arn}:$LATEST",
+                        "Payload": {
+                          "data_bucket.$": "$.data_bucket",
+                          "data_key.$": "$.data_key",
+                          "flow_bucket.$": "$.flow_bucket",
+                          "flow_key.$": "$.flow_key",
+                          "pipeline_name.$": "$.pipeline_name",
+                          "pipeline_name2.$": "$.pipeline_name2",
+                          "new_flow_key.$": "$.new_flow_key",
+                          "new_flow_uri.$": "$.new_flow_uri"
+                        }
+                      },
+                      "Retry": [
+                        {
+                          "ErrorEquals": [
+                            "Lambda.ServiceException",
+                            "Lambda.AWSLambdaException",
+                            "Lambda.SdkClientException"
+                          ],
+                          "IntervalSeconds": 2,
+                          "MaxAttempts": 6,
+                          "BackoffRate": 2
+                        }
+                      ],
+                      "Next": "Wait"
+                    },
+                    "Wait": {
+                      "Type": "Wait",
+                      "Next": "Model-Job-Creation & Deployment",
+                      "Seconds": 420
+                    },
+                    "Model-Job-Creation & Deployment": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::lambda:invoke",
+                      "OutputPath": "$.Payload",
+                      "Parameters": {
+                        "FunctionName": "${LambdaAutomlEndpointFunction.Arn}:$LATEST"
+                      },
+                      "Retry": [
+                        {
+                          "ErrorEquals": [
+                            "Lambda.ServiceException",
+                            "Lambda.AWSLambdaException",
+                            "Lambda.SdkClientException"
+                          ],
+                          "IntervalSeconds": 2,
+                          "MaxAttempts": 6,
+                          "BackoffRate": 2
+                        }
+                      ],
+                      "End": true
+                    },
+                    "RejectedPassState": {
+                      "Type": "Fail"
+                    }
+                  }
+                }
+
+  StepFunctionsActivity:
+    Type: "AWS::StepFunctions::Activity"
+    Properties: 
+      Name: ManualStepActivity
+      
+Outputs:
+  ApiGatewayInvokeURL:
+    Value: !Sub "https://${ExecutionApi}.execute-api.${AWS::Region}.amazonaws.com/states"
+  StateMachineHumanApprovalArn:
+    Value: !Ref StepFunctionsStateMachine
+  NotificationApiEndpoint:
+    Value:
+      !Join
+        - ''
+        - - 'https://'
+          - !Ref NotificationApi
+          - '.execute-api.'
+          - !Ref AWS::Region
+          - '.'
+          - !Ref AWS::URLSuffix
+          - '/'
+          - !Ref NotificationApiDeploymentStageprod
