@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: 2010-09-09
-Description: This CloudFormation creates stack for Exploratory Data Analysis sample.
+Description: This CloudFormation creates stack for Exploratory Data Analysis and ML model Operationalization with human in the loop.
 Parameters:
   Email:
     Type: String
@@ -1021,7 +1021,7 @@ Resources:
                 Size: 512
 
  # AWS Lambda Function for automatically triggering data wrangler operation within step function
-  LambdaWranglerAutomateFunction:
+  LambdaWranglerFlowFunction:
         Type: "AWS::Lambda::Function"
         Properties:
             Description: "Lambda Function for Automating Data Wrangler Operation"
@@ -1034,7 +1034,7 @@ Resources:
                     pipeline_name: "ENTER_FEATURE_STORE_PIPELINE_NAME"
                     pipeline_name2: "ENTER_S3_PIPELINE_NAME"
                     MY_STATE_MACHINE_ARN: !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${StatemachineName}
-            FunctionName: "LambdaWranglerAutomateFunction"
+            FunctionName: "LambdaWranglerFlowFunction"
             Handler: "index.lambda_handler"
             Code:
                 ZipFile: !Sub |
@@ -1085,8 +1085,8 @@ Resources:
                         # ---------------------------------------------------#
                         
                         #Send SNS Notification to the authorized person
-                        sns_message = str("This Email Represents a File with datawrangler - found in one of Your Bucket \n\n BUCKET NAME: "+ flow_bucket +"\n\n FILE NAME: " + new_flow_key + "\n\n" 
-                        + " You can download the New Wrangler flow file generated in the bucket, and inspect on the new dataset in Sagemaker Studio.")
+                        sns_message = str("This Email Represents a File with datawrangler - found in one of your Buckets \n\n BUCKET NAME: "+ flow_bucket +"\n\n FILE NAME: " + new_flow_key + "\n\n" 
+                        + " You can download the above newly generated Wrangler flow file stored in the respective bucket. Further, you can import the file in Sagemaker studio within Data Wrangler UI and inspect data insights, on the new dataset in Sagemaker Studio.")
                         message="This file got uploaded: " + new_flow_key + " to this bucket : " + flow_bucket 
                         print(message)
                         subject= "S3 Bucket[" + flow_bucket + "] "
@@ -1225,7 +1225,7 @@ Resources:
                           
                           timestamp_suffix = strftime('%d-%H-%M', gmtime())
                       
-                       #create automl experiment
+                       #Create Automl experiment
                           
                           default_autopilot_job_name = f'aws-autopilot-{timestamp_suffix}'
                           autopilot_job_name = f'autopilot-healthcare-{timestamp_suffix}'
@@ -1239,9 +1239,9 @@ Resources:
                           
                           autopilot_job_config: dict = {
                               'CompletionCriteria': {
-                                  'MaxRuntimePerTrainingJobInSeconds': 500, #600 before
+                                  'MaxRuntimePerTrainingJobInSeconds': 500, 
                                   'MaxCandidates': 2,
-                                  'MaxAutoMLJobRuntimeInSeconds': 4500 #5400
+                                  'MaxAutoMLJobRuntimeInSeconds': 4500 
                                       }
                                   }
                           
@@ -1264,7 +1264,7 @@ Resources:
                           
                           autopilot_model_deploy_config = { 
                           'AutoGenerateEndpointName': False,
-                          'EndpointName' : 'AutopilotHealthcareEndpoint-v2'
+                          'EndpointName' : 'AutopilotHealthcareEndpoint'
                           }
                           
                           # Tags="autopilot_job"
@@ -1314,15 +1314,15 @@ Resources:
             DefinitionString:
               Fn::Sub: |
                 {
-                  "StartAt": "Auto-ETL Processing",
+                  "StartAt": "DataWrangler Flow Creation",
                   "TimeoutSeconds": 3600,
                   "States": {
-                    "Auto-ETL Processing": {
+                    "DataWrangler Flow Creation": {
                       "Type": "Task",
                       "Resource": "arn:aws:states:::lambda:invoke",
                       "Parameters": {
                         "Payload.$": "$",
-                        "FunctionName": "${LambdaWranglerAutomateFunction.Arn}:$LATEST"
+                        "FunctionName": "${LambdaWranglerFlowFunction.Arn}:$LATEST"
                       },
                       "Retry": [
                         {
@@ -1336,10 +1336,10 @@ Resources:
                           "BackoffRate": 2
                         }
                       ],
-                      "Next": "ETL Callback Approval",
+                      "Next": "User Callback Approval",
                       "OutputPath": "$.Payload"
                     },
-                    "ETL Callback Approval": {
+                    "User Callback Approval": {
                       "Type": "Task",
                       "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
                       "Parameters": {
@@ -1364,7 +1364,7 @@ Resources:
                         {
                           "Variable": "$.Payload.Status",
                           "StringEquals": "Approved! Task approved by ${Email}", 
-                          "Next": "Sagemaker-Pipeline-execute"
+                          "Next": "Sagemaker-Pipeline-execution"
                         },
                         {
                           "Variable": "$.Payload.Status",
@@ -1374,7 +1374,7 @@ Resources:
                       ],
                       "Default": "RejectedPassState"
                     },
-                    "Sagemaker-Pipeline-execute": {
+                    "Sagemaker-Pipeline-execution": {
                       "Type": "Task",
                       "Resource": "arn:aws:states:::lambda:invoke",
                       "Parameters": {
@@ -1406,10 +1406,10 @@ Resources:
                     },
                     "Wait": {
                       "Type": "Wait",
-                      "Next": "Model-Job-Creation & Deployment",
+                      "Next": "AutoML Model Job Creation & Model Deployment",
                       "Seconds": 420
                     },
-                    "Model-Job-Creation & Deployment": {
+                    "AutoML Model Job Creation & Model Deployment": {
                       "Type": "Task",
                       "Resource": "arn:aws:states:::lambda:invoke",
                       "OutputPath": "$.Payload",
