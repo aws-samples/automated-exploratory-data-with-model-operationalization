@@ -18,7 +18,7 @@ In order to demonstrate the orchestrated workflow, we use the example of ![Patie
 
 ## Walkthrough
 
-For a full walkthrough of Automating Exploratory Data Analysis and Model Operationalization with Amazon Sagemaker, see this blog post. 
+For a full walkthrough of Automating Exploratory Data Analysis and Model Operationalization with Amazon Sagemaker, see this blog post. <Link here>
 
 Our solution demonstrates an automated end-to-end approach to perform Exploratory Data Analysis (EDA) with human in the loop to determine the model quality thresholds and approve the optimal/qualified data to be pushed into Sagemaker pipeline in order to push the final data into feature store, thereby speeding the executional framework. 
 
@@ -38,6 +38,26 @@ Once the flow has been created which includes the recipe of instructions to be e
 The architecture below showcases the end-to-end automation of data transformation followed by human in the loop approval to facilitate the steps of model training and deployment. 
 
 ![stepfunction.png](https://github.com/aws-samples/automated-exploratory-data-with-model-operationalization/blob/main/Images/stepfunction.png)
+
+
+## Deployment Steps
+
+### Data Wrangler Initial Data Ops Flow 
+
+Prior to automating using Step functions workflow, we need to perform a sequence of data transformations to create a flow. 
+
+To start using Data Wrangler, complete the following steps:
+1.	In a Sagemaker Studio domain, on the Launcher tab, choose “New data flow”.
+2.	Import the Patient Readmission Dataset HealthcareDiabeticReadmission.csv from its location in Amazon S3.
+3.	Choose Import dataset.
+
+![importdataset.png](https://github.com/aws-samples/automated-exploratory-data-with-model-operationalization/blob/main/Images/importdataset.png)
+
+Now, we can start with data transformation in data wrangler UI. We are going to perform a sequence of 8 steps to process, clean and transform the data along with some analysis dashboards to do an initial data and model quality checks.
+
+- Since we intend to view the data quality and model checks initially, start with clicking on “Analysis” tab next to “data” tab and click on “Create new analysis”.
+-	Under create analysis section, choose analysis type as “Data Quality and Insights Report”, target column as “readmitted” and problem type as “Classification” as shown below. Then, click on create. 
+
 
 ## Clean-up
 
