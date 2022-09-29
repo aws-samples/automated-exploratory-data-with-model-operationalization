@@ -51,7 +51,7 @@ To start using Data Wrangler, complete the following steps:
 2.	Import the Patient Readmission Dataset HealthcareDiabeticReadmission.csv from its location in Amazon S3.
 3.	Choose Import dataset.
 
-![importdataset.png](https://github.com/aws-samples/automated-exploratory-data-with-model-operationalization/blob/main/Images/importdataset.png)
+![importdata.png](https://github.com/aws-samples/automated-exploratory-data-with-model-operationalization/blob/main/Images/importdata.png)
 
 Now, we can start with data transformation in data wrangler UI. We are going to perform a sequence of 8 steps to process, clean and transform the data along with some analysis dashboards to do an initial data and model quality checks.
 
