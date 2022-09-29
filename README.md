@@ -37,7 +37,7 @@ Once the flow has been created which includes the recipe of instructions to be e
 
 The architecture below showcases the end-to-end automation of data transformation followed by human in the loop approval to facilitate the steps of model training and deployment. 
 
-![stepfunction.png](https://github.com/aws-samples/automated-exploratory-data-with-model-operationalization/blob/main/Images/stepfunction.png)
+![stepfunctions.png](https://github.com/aws-samples/automated-exploratory-data-with-model-operationalization/blob/main/Images/stepfunctions.png)
 
 
 ## Deployment Steps
