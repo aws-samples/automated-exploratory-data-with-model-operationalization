@@ -48,7 +48,7 @@ Prior to automating using Step functions workflow, we need to perform a sequence
 
 To start using Data Wrangler, complete the following steps:
 1.	In a Sagemaker Studio domain, on the Launcher tab, choose “New data flow”.
-2.	Import the Patient Readmission Dataset HealthcareDiabeticReadmission.csv from its location in Amazon S3.
+2.	Import the Patient Readmission Dataset `flowHealthcareDiabeticReadmission.csv` from its location in Amazon S3.
 3.	Choose Import dataset.
 
 ![importdata.png](https://github.com/aws-samples/automated-exploratory-data-with-model-operationalization/blob/main/Images/importdata.png)
