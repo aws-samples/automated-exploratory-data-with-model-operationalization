@@ -6,7 +6,7 @@ In this repository, we present artifacts corresponding an intelligent framework 
 
 ## Dataset
 
-In order to demonstrate the orchestrated workflow, we use the example of ![Patient Diabetic Readmission Dataset](https://github.com/aws-samples/automated-exploratory-data-with-model-operationalization/blob/main/Dataset/HealthcareDiabeticReadmission.csv). This data comprises of historical representation of patient and hospital outcomes, wherein the goal involves building a machine learning (ML) to predict hospital readmission. The model has to predict whether the high-risk diabetic-patients is likely to get readmitted to hospital after previous encounter within thirty days or after thirty days or not. Since this use case deal with multiple outcomes, this ML problem is called "Multi-class Classification". 
+In order to demonstrate the orchestrated workflow, we use the example of ![Patient Diabetic Readmission Dataset](https://github.com/aws-samples/automated-exploratory-data-with-model-operationalization/blob/main/Dataset/flowHealthcareDiabeticReadmission.csv). This data comprises of historical representation of patient and hospital outcomes, wherein the goal involves building a machine learning (ML) to predict hospital readmission. The model has to predict whether the high-risk diabetic-patients is likely to get readmitted to hospital after previous encounter within thirty days or after thirty days or not. Since this use case deal with multiple outcomes, this ML problem is called "Multi-class Classification". 
 
 
 ## Prerequisites
